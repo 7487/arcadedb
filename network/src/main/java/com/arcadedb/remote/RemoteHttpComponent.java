@@ -129,6 +129,7 @@ public class RemoteHttpComponent extends RWLockContext {
   private         int                         apiVersion                = 1;
   private         CONNECTION_STRATEGY         connectionStrategy        = CONNECTION_STRATEGY.ROUND_ROBIN;
   private volatile Pair<String, Integer>       leaderServer;
+  private volatile boolean                     clusterTopologyKnown;
   // The server that answered the last successful reload: the one address a failover has just proven to be reachable
   private volatile Pair<String, Integer>       lastConfigurationSource;
   private volatile int                         currentReplicaServerIndex = -1;
@@ -952,7 +953,7 @@ public class RemoteHttpComponent extends RWLockContext {
 
     try {
       if (response.has("ha"))
-        publishTopology(parseTopology(response.getJSONObject("ha")));
+        publishTopology(parseTopology(response.getJSONObject("ha"), false));
       else
         publishDirectConnection();
     } catch (final Exception e) {
@@ -973,10 +974,10 @@ public class RemoteHttpComponent extends RWLockContext {
     final JSONObject response = fetchClusterConfiguration(server);
 
     if (response.has("ha")) {
-      final ClusterTopology topology = parseTopology(response.getJSONObject("ha"));
+      final ClusterTopology topology = parseTopology(response.getJSONObject("ha"), true);
       publishAdvertisedPorts(response);
       publishTopology(topology);
-    } else if (server.equals(new Pair<>(originalServer, originalPort))) {
+    } else if (!clusterTopologyKnown && server.equals(new Pair<>(originalServer, originalPort))) {
       publishAdvertisedPorts(response);
       publishDirectConnection();
     } else
@@ -1005,7 +1006,7 @@ public class RemoteHttpComponent extends RWLockContext {
     return response;
   }
 
-  private ClusterTopology parseTopology(final JSONObject ha) {
+  private ClusterTopology parseTopology(final JSONObject ha, final boolean rejectInvalidReplicas) {
     final String cfgLeaderServer = (String) ha.get("leaderAddress");
 
     final String[] leaderServerParts = HostUtil.parseHostAddress(cfgLeaderServer, HostUtil.HA_DEFAULT_PORT);
@@ -1029,6 +1030,8 @@ public class RemoteHttpComponent extends RWLockContext {
 
           newReplicaServerList.add(new Pair(sHost, sPort));
         } catch (Exception e) {
+          if (rejectInvalidReplicas)
+            throw new IllegalArgumentException("Invalid replica server address '" + serverEntry + "'", e);
           LogManager.instance().log(this, Level.SEVERE, "Invalid replica server address '%s'", null, serverEntry);
         }
       }
@@ -1038,6 +1041,7 @@ public class RemoteHttpComponent extends RWLockContext {
   }
 
   private void publishTopology(final ClusterTopology topology) {
+    clusterTopologyKnown = true;
     leaderServer = topology.leader();
     publishReplicaServerList(topology.replicas());
 
@@ -1047,6 +1051,7 @@ public class RemoteHttpComponent extends RWLockContext {
   }
 
   private void publishDirectConnection() {
+    clusterTopologyKnown = false;
     leaderServer = new Pair<>(originalServer, originalPort);
     publishReplicaServerList(new ArrayList<>());
   }

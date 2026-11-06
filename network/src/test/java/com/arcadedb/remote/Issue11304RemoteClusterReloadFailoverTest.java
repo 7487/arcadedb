@@ -162,6 +162,23 @@ class Issue11304RemoteClusterReloadFailoverTest {
     assertThat(client.getReplicaAddresses()).containsExactly(replica.address());
   }
 
+  @Test
+  void anInvalidReplicaAddressRejectsTheAnswerAndTriesTheNextServer() throws Exception {
+    final Node original = node();
+    final Node badReplica = node();
+    final Node liveReplica = node();
+
+    original.answer(cluster(original.address(), badReplica.address(), liveReplica.address()));
+    badReplica.answer(cluster(badReplica.address(), "127.0.0.1:bad"));
+    liveReplica.answer(cluster(liveReplica.address(), ""));
+    client = connect(original);
+
+    original.stop();
+
+    assertThat(client.reloadClusterConfiguration()).isTrue();
+    assertThat(client.getLeaderAddress()).isEqualTo(liveReplica.address());
+  }
+
   /** A node that is not in the cluster (yet) has no topology to give: it must not cost the client the one it has. */
   @Test
   void aReplicaThatAnswersWithoutHaDoesNotReplaceTheTopology() throws Exception {
@@ -178,6 +195,21 @@ class Issue11304RemoteClusterReloadFailoverTest {
 
     assertThat(client.reloadClusterConfiguration()).isTrue();
     assertThat(client.getLeaderAddress()).isEqualTo(newLeader.address());
+  }
+
+  @Test
+  void theOriginalServerCannotReplaceAKnownClusterTopologyWithAStandaloneAnswer() throws Exception {
+    final Node original = node();
+    final Node replica = node();
+
+    original.answer(cluster(original.address(), replica.address()));
+    client = connect(original);
+
+    original.answer("{}");
+
+    assertThat(client.reloadClusterConfiguration()).isFalse();
+    assertThat(client.getLeaderAddress()).isEqualTo(original.address());
+    assertThat(client.getReplicaAddresses()).containsExactly(replica.address());
   }
 
   @Test
